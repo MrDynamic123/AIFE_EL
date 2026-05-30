@@ -1,0 +1,18 @@
+<configuration>
+    <input>
+        <net-file value="junction.net.xml"/>
+        <route-files value="routes.rou.xml"/>
+    </input>
+    <time>
+        <begin value="0"/>
+        <step-length value="1"/>
+    </time>
+    <report>
+        <no-step-log value="true"/>
+        <no-warnings value="true"/>
+    </report>
+    <gui_only>
+        <start value="true"/>
+        <tracker-interval value="1"/>
+    </gui_only>
+</configuration>

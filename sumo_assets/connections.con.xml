@@ -1,0 +1,26 @@
+<connections>
+    <connection from="N2J" to="J2S" fromLane="0" toLane="0"/>
+    <connection from="N2J" to="J2E" fromLane="0" toLane="0"/>
+    <connection from="N2J" to="J2W" fromLane="0" toLane="0"/>
+    <connection from="N2J" to="J2S" fromLane="1" toLane="1"/>
+    <connection from="N2J" to="J2E" fromLane="1" toLane="1"/>
+    <connection from="N2J" to="J2W" fromLane="1" toLane="1"/>
+    <connection from="S2J" to="J2N" fromLane="0" toLane="0"/>
+    <connection from="S2J" to="J2W" fromLane="0" toLane="0"/>
+    <connection from="S2J" to="J2E" fromLane="0" toLane="0"/>
+    <connection from="S2J" to="J2N" fromLane="1" toLane="1"/>
+    <connection from="S2J" to="J2W" fromLane="1" toLane="1"/>
+    <connection from="S2J" to="J2E" fromLane="1" toLane="1"/>
+    <connection from="E2J" to="J2W" fromLane="0" toLane="0"/>
+    <connection from="E2J" to="J2S" fromLane="0" toLane="0"/>
+    <connection from="E2J" to="J2N" fromLane="0" toLane="0"/>
+    <connection from="E2J" to="J2W" fromLane="1" toLane="1"/>
+    <connection from="E2J" to="J2S" fromLane="1" toLane="1"/>
+    <connection from="E2J" to="J2N" fromLane="1" toLane="1"/>
+    <connection from="W2J" to="J2E" fromLane="0" toLane="0"/>
+    <connection from="W2J" to="J2N" fromLane="0" toLane="0"/>
+    <connection from="W2J" to="J2S" fromLane="0" toLane="0"/>
+    <connection from="W2J" to="J2E" fromLane="1" toLane="1"/>
+    <connection from="W2J" to="J2N" fromLane="1" toLane="1"/>
+    <connection from="W2J" to="J2S" fromLane="1" toLane="1"/>
+</connections>

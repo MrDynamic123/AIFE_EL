@@ -1,0 +1,17 @@
+<routes>
+    <vType id="car" accel="1.4" decel="3.8" sigma="0.5" length="5" maxSpeed="6.0" color="0,0.45,1"/>
+    <vType id="violator" accel="1.8" decel="4.0" sigma="0.2" length="5" maxSpeed="7.0" color="1,0,0"/>
+    <vType id="ambulance" accel="2.0" decel="4.5" sigma="0.1" length="6.5" maxSpeed="8.0" color="1,1,1" guiShape="emergency"/>
+    <route id="N_S" edges="N2J J2S"/>
+    <route id="N_E" edges="N2J J2E"/>
+    <route id="N_W" edges="N2J J2W"/>
+    <route id="S_N" edges="S2J J2N"/>
+    <route id="S_W" edges="S2J J2W"/>
+    <route id="S_E" edges="S2J J2E"/>
+    <route id="E_W" edges="E2J J2W"/>
+    <route id="E_S" edges="E2J J2S"/>
+    <route id="E_N" edges="E2J J2N"/>
+    <route id="W_E" edges="W2J J2E"/>
+    <route id="W_N" edges="W2J J2N"/>
+    <route id="W_S" edges="W2J J2S"/>
+</routes>
