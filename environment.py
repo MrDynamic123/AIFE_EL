@@ -14,6 +14,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+# Auto-detect SUMO installation on Windows if SUMO_HOME is missing
+if "SUMO_HOME" not in os.environ:
+    for default_path in [r"C:\Program Files (x86)\Eclipse\Sumo", r"C:\Program Files\Eclipse\Sumo"]:
+        if os.path.exists(default_path):
+            os.environ["SUMO_HOME"] = default_path
+            os.environ["PATH"] += os.pathsep + os.path.join(default_path, "bin")
+            break
+
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces

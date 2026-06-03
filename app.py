@@ -12,7 +12,7 @@ import threading
 import time
 import tkinter as tk
 from pathlib import Path
-from tkinter import ttk
+import customtkinter as ctk
 
 from stable_baselines3 import DQN, PPO
 
@@ -20,7 +20,7 @@ from environment import OUTBOUND_BY_INBOUND, SPEC, SumoEnvironment, ensure_sumo_
 
 
 class TrafficControlApp:
-    def __init__(self, root: tk.Tk, model_path: Path, algo: str) -> None:
+    def __init__(self, root: ctk.CTk, model_path: Path, algo: str) -> None:
         self.root = root
         self.root.title("SUMO RL Traffic Control")
         self.commands: queue.Queue[tuple[str, object]] = queue.Queue()
@@ -29,84 +29,93 @@ class TrafficControlApp:
         self.spawned: list[str] = []
         self.latest_info: dict | None = None
 
-        cfg = ensure_sumo_assets()
-        self.env = SumoEnvironment(sumo_cfg=cfg, use_gui=False, min_green_seconds=10)
-        model_cls = PPO if algo == "ppo" else DQN
-        self.model = model_cls.load(model_path)
-
         self._build_ui()
-        self.worker = threading.Thread(target=self._simulation_loop, daemon=True)
-        self.worker.start()
+
+        try:
+            cfg = ensure_sumo_assets()
+            self.env = SumoEnvironment(sumo_cfg=cfg, use_gui=False, min_green_seconds=10)
+            model_cls = PPO if algo == "ppo" else DQN
+            self.model = model_cls.load(model_path)
+            self.worker = threading.Thread(target=self._simulation_loop, daemon=True)
+            self.worker.start()
+        except Exception as e:
+            self.env = None
+            print(f"Warning: Starting without SUMO backend due to error: {e}")
+            self.status.set("SUMO missing. Frontend running in Preview Mode.")
+            self._draw_map()
+
         self.root.after(250, self._refresh_metrics)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _build_ui(self) -> None:
-        frame = ttk.Frame(self.root, padding=10)
-        frame.grid(row=0, column=0, sticky="nsew")
-        self.root.columnconfigure(0, weight=1)
+        self.root.columnconfigure(0, weight=0, minsize=280)
+        self.root.columnconfigure(1, weight=1)
         self.root.rowconfigure(0, weight=1)
 
-        buttons = ttk.Frame(frame)
-        buttons.grid(row=0, column=0, sticky="ew")
+        sidebar = ctk.CTkFrame(self.root, corner_radius=0, fg_color="#1e1e24")
+        sidebar.grid(row=0, column=0, sticky="nsew")
+        
+        ctk.CTkLabel(sidebar, text="CONTROL PANEL", font=ctk.CTkFont(size=20, weight="bold")).pack(pady=(25, 25))
 
-        self.vehicle_type = tk.StringVar(value="car")
-        self.origin_lane = tk.StringVar(value="Random")
-        self.target_edge = tk.StringVar(value="Random")
+        self.vehicle_type = ctk.StringVar(value="car")
+        self.origin_lane = ctk.StringVar(value="Random")
+        self.target_edge = ctk.StringVar(value="Random")
 
-        ttk.Label(buttons, text="Vehicle").grid(row=0, column=0, sticky="w", padx=(0, 4))
-        ttk.Combobox(
-            buttons,
-            textvariable=self.vehicle_type,
-            values=("car", "ambulance", "violator"),
-            width=12,
-            state="readonly",
-        ).grid(row=0, column=1, padx=(0, 10))
+        ctk.CTkLabel(sidebar, text="Vehicle Type").pack(anchor="w", padx=20, pady=(0, 2))
+        ctk.CTkComboBox(sidebar, variable=self.vehicle_type, values=["car", "ambulance", "violator"], state="readonly").pack(fill="x", padx=20, pady=(0, 15))
 
-        ttk.Label(buttons, text="From lane").grid(row=0, column=2, sticky="w", padx=(0, 4))
-        ttk.Combobox(
-            buttons,
-            textvariable=self.origin_lane,
-            values=("Random", *SPEC.inbound_lanes),
-            width=12,
-            state="readonly",
-        ).grid(row=0, column=3, padx=(0, 10))
+        ctk.CTkLabel(sidebar, text="From Lane").pack(anchor="w", padx=20, pady=(0, 2))
+        ctk.CTkComboBox(sidebar, variable=self.origin_lane, values=["Random", *SPEC.inbound_lanes], state="readonly").pack(fill="x", padx=20, pady=(0, 15))
 
-        ttk.Label(buttons, text="To road").grid(row=0, column=4, sticky="w", padx=(0, 4))
-        ttk.Combobox(
-            buttons,
-            textvariable=self.target_edge,
-            values=("Random", *SPEC.outbound_edges),
-            width=12,
-            state="readonly",
-        ).grid(row=0, column=5, padx=(0, 10))
+        ctk.CTkLabel(sidebar, text="To Road").pack(anchor="w", padx=20, pady=(0, 2))
+        ctk.CTkComboBox(sidebar, variable=self.target_edge, values=["Random", *SPEC.outbound_edges], state="readonly").pack(fill="x", padx=20, pady=(0, 20))
 
-        ttk.Button(buttons, text="Spawn Selected", command=self._spawn_selected).grid(row=0, column=6, padx=4)
-        ttk.Button(buttons, text="Trigger Accident", command=lambda: self.commands.put(("accident", None))).grid(row=0, column=7, padx=4)
+        ctk.CTkButton(sidebar, text="Spawn Selected", command=self._spawn_selected, height=40, font=ctk.CTkFont(weight="bold")).pack(fill="x", padx=20, pady=(0, 10))
+        ctk.CTkButton(sidebar, text="Trigger Accident", command=lambda: self.commands.put(("accident", None)), height=40, fg_color="#ef4444", hover_color="#dc2626", font=ctk.CTkFont(weight="bold")).pack(fill="x", padx=20, pady=(0, 25))
 
-        self.force_priority = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
-            buttons,
-            text="Force Priority",
-            variable=self.force_priority,
-            command=lambda: self.commands.put(("force_priority", self.force_priority.get())),
-        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self.force_priority = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(sidebar, text="Force Ambulance Priority", variable=self.force_priority, command=lambda: self.commands.put(("force_priority", self.force_priority.get()))).pack(anchor="w", padx=20, pady=(0, 15))
 
-        self.background_traffic = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            buttons,
-            text="Background Traffic",
-            variable=self.background_traffic,
-            command=lambda: self.commands.put(("background_traffic", self.background_traffic.get())),
-        ).grid(row=1, column=2, columnspan=2, sticky="w", pady=(8, 0))
+        self.background_traffic = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(sidebar, text="Enable Background Traffic", variable=self.background_traffic, command=lambda: self.commands.put(("background_traffic", self.background_traffic.get()))).pack(anchor="w", padx=20, pady=(0, 10))
 
-        self.status = tk.StringVar(value="Starting SUMO...")
-        ttk.Label(frame, textvariable=self.status).grid(row=1, column=0, sticky="w", pady=(10, 0))
+        self.status = ctk.StringVar(value="System Ready")
+        ctk.CTkLabel(sidebar, textvariable=self.status, font=ctk.CTkFont(size=13, slant="italic"), text_color="#a1a1aa", wraplength=240).pack(side="bottom", pady=20, padx=20)
 
-        self.map_canvas = tk.Canvas(frame, bg="#2f3437", highlightthickness=0, width=860, height=520)
-        self.map_canvas.grid(row=2, column=0, sticky="nsew", pady=(10, 0))
-        frame.rowconfigure(2, weight=1)
-        frame.columnconfigure(0, weight=1)
+        main_view = ctk.CTkFrame(self.root, corner_radius=0, fg_color="#2b2b36")
+        main_view.grid(row=0, column=1, sticky="nsew")
+        main_view.rowconfigure(1, weight=1)
+        main_view.columnconfigure(0, weight=1)
+
+        dashboard = ctk.CTkFrame(main_view, fg_color="transparent")
+        dashboard.grid(row=0, column=0, sticky="ew", padx=20, pady=20)
+        for i in range(4):
+            dashboard.columnconfigure(i, weight=1)
+
+        self.val_vehicles = ctk.StringVar(value="0")
+        self.val_signal = ctk.StringVar(value="N/A")
+        self.val_priority = ctk.StringVar(value="None")
+        self.val_blocked = ctk.StringVar(value="0")
+
+        self._create_metric_card(dashboard, 0, "Active Vehicles", self.val_vehicles)
+        self._create_metric_card(dashboard, 1, "Signal Phase", self.val_signal, text_color="#22c55e")
+        self._create_metric_card(dashboard, 2, "Ambulance Priority", self.val_priority)
+        self._create_metric_card(dashboard, 3, "Blocked Lanes", self.val_blocked, text_color="#ef4444")
+
+        canvas_frame = ctk.CTkFrame(main_view, fg_color="#2b2b36")
+        canvas_frame.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 20))
+        canvas_frame.rowconfigure(0, weight=1)
+        canvas_frame.columnconfigure(0, weight=1)
+        
+        self.map_canvas = tk.Canvas(canvas_frame, bg="#2b2b36", highlightthickness=0)
+        self.map_canvas.grid(row=0, column=0, sticky="nsew")
         self.map_canvas.bind("<Configure>", lambda _event: self._draw_map())
+
+    def _create_metric_card(self, parent, col, title, variable, text_color="#ffffff"):
+        card = ctk.CTkFrame(parent, fg_color="#363645", corner_radius=10)
+        card.grid(row=0, column=col, sticky="ew", padx=5)
+        ctk.CTkLabel(card, text=title, font=ctk.CTkFont(size=13, weight="normal"), text_color="#a1a1aa").pack(pady=(12, 0))
+        ctk.CTkLabel(card, textvariable=variable, font=ctk.CTkFont(size=26, weight="bold"), text_color=text_color).pack(pady=(0, 12))
 
     def _spawn_selected(self) -> None:
         self.commands.put(
@@ -180,16 +189,12 @@ class TrafficControlApp:
                     self.root.after(250, self._refresh_metrics)
                 return
             self.latest_info = latest
-            signal = "North/South green" if latest["phase"] == 0 else "East/West green"
-            priority = latest.get("ambulance_priority") or "none"
-            self.status.set(
-                "Vehicles: {vehicles} | Signal: {signal} | Ambulance priority: {priority} | Accidents: {blocked}".format(
-                    vehicles=latest["vehicles"],
-                    signal=signal,
-                    priority=priority,
-                    blocked=len(latest["blocked_lanes"]),
-                )
-            )
+            signal = "N/S Green" if latest["phase"] == 0 else "E/W Green"
+            priority = latest.get("ambulance_priority") or "None"
+            self.val_vehicles.set(str(latest["vehicles"]))
+            self.val_signal.set(signal)
+            self.val_priority.set(priority)
+            self.val_blocked.set(str(len(latest["blocked_lanes"])))
             self._draw_map()
         if self.running:
             self.root.after(80, self._refresh_metrics)
@@ -206,14 +211,14 @@ class TrafficControlApp:
         lane = road / 4
         extent = min(width, height) * 0.48
 
-        canvas.create_rectangle(0, 0, width, height, fill="#2f3437", outline="")
-        canvas.create_rectangle(cx - road / 2, cy - extent, cx + road / 2, cy + extent, fill="#4a4f52", outline="")
-        canvas.create_rectangle(cx - extent, cy - road / 2, cx + extent, cy + road / 2, fill="#4a4f52", outline="")
-        canvas.create_rectangle(cx - road / 2, cy - road / 2, cx + road / 2, cy + road / 2, fill="#555b5f", outline="")
+        canvas.create_rectangle(0, 0, width, height, fill="#2b2b36", outline="")
+        canvas.create_rectangle(cx - road / 2, cy - extent, cx + road / 2, cy + extent, fill="#3f3f4e", outline="")
+        canvas.create_rectangle(cx - extent, cy - road / 2, cx + extent, cy + road / 2, fill="#3f3f4e", outline="")
+        canvas.create_rectangle(cx - road / 2, cy - road / 2, cx + road / 2, cy + road / 2, fill="#4c4c5e", outline="")
 
         for offset in (-lane, lane):
-            canvas.create_line(cx + offset, cy - extent, cx + offset, cy + extent, fill="#d8dde0", dash=(10, 10), width=1)
-            canvas.create_line(cx - extent, cy + offset, cx + extent, cy + offset, fill="#d8dde0", dash=(10, 10), width=1)
+            canvas.create_line(cx + offset, cy - extent, cx + offset, cy + extent, fill="#7a7a8c", dash=(10, 10), width=1)
+            canvas.create_line(cx - extent, cy + offset, cx + extent, cy + offset, fill="#7a7a8c", dash=(10, 10), width=1)
 
         canvas.create_text(cx, cy - extent + 18, text="N2J", fill="#eef2f3", font=("Segoe UI", 10, "bold"))
         canvas.create_text(cx, cy + extent - 18, text="S2J", fill="#eef2f3", font=("Segoe UI", 10, "bold"))
@@ -320,8 +325,12 @@ def main() -> None:
     model_path = Path(args.model)
     if not model_path.exists():
         raise FileNotFoundError(f"Model not found: {model_path}. Train one with `python train.py` first.")
-    root = tk.Tk()
-    root.geometry("920x620")
+    
+    ctk.set_appearance_mode("Dark")
+    ctk.set_default_color_theme("blue")
+    
+    root = ctk.CTk()
+    root.geometry("1150x700")
     TrafficControlApp(root, model_path, args.algo)
     root.mainloop()
 
