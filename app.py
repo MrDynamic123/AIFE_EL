@@ -176,26 +176,31 @@ class TrafficControlApp:
                 self.env.set_background_traffic(bool(value))
 
     def _refresh_metrics(self) -> None:
-        latest = None
+        latest_info = None
+        latest_message = None
         while True:
             try:
-                latest = self.metrics.get_nowait()
+                item = self.metrics.get_nowait()
+                if "message" in item:
+                    latest_message = item["message"]
+                else:
+                    latest_info = item
             except queue.Empty:
                 break
-        if latest:
-            if "message" in latest:
-                self.status.set(latest["message"])
-                if self.running:
-                    self.root.after(250, self._refresh_metrics)
-                return
-            self.latest_info = latest
-            signal = "N/S Green" if latest["phase"] == 0 else "E/W Green"
-            priority = latest.get("ambulance_priority") or "None"
-            self.val_vehicles.set(str(latest["vehicles"]))
+                
+        if latest_message:
+            self.status.set(latest_message)
+            
+        if latest_info:
+            self.latest_info = latest_info
+            signal = "N/S Green" if latest_info["phase"] == 0 else "E/W Green"
+            priority = latest_info.get("ambulance_priority") or "None"
+            self.val_vehicles.set(str(latest_info["vehicles"]))
             self.val_signal.set(signal)
             self.val_priority.set(priority)
-            self.val_blocked.set(str(len(latest["blocked_lanes"])))
+            self.val_blocked.set(str(len(latest_info["blocked_lanes"])))
             self._draw_map()
+            
         if self.running:
             self.root.after(80, self._refresh_metrics)
 
@@ -207,7 +212,12 @@ class TrafficControlApp:
         cx = width / 2
         cy = height / 2
         scale = min(width, height) / 620
-        road = 92 * scale
+        extent = min(width, height) * 0.48
+        
+        view_distance_m = 60.0
+        scale_m = extent / view_distance_m
+        
+        road = 12.8 * scale_m
         lane = road / 4
         extent = min(width, height) * 0.48
 
@@ -230,10 +240,17 @@ class TrafficControlApp:
         self._draw_lane_signals(cx, cy, road, scale, phase)
 
         for accident in info.get("accidents", []):
-            self._draw_accident(accident, cx, cy, scale)
+            self._draw_accident(accident, cx, cy, scale_m, scale)
 
         for vehicle in info.get("vehicle_states", []):
-            self._draw_vehicle(vehicle, cx, cy, scale)
+            self._draw_vehicle(vehicle, cx, cy, scale_m, scale)
+
+        # Draw outer masks so vehicles disappear exactly at the edge of the roads
+        bg_color = "#2b2b36"
+        canvas.create_rectangle(0, 0, width, cy - extent, fill=bg_color, outline="")
+        canvas.create_rectangle(0, cy + extent, width, height, fill=bg_color, outline="")
+        canvas.create_rectangle(0, 0, cx - extent, height, fill=bg_color, outline="")
+        canvas.create_rectangle(cx + extent, 0, width, height, fill=bg_color, outline="")
 
     def _draw_lane_signals(self, cx: float, cy: float, road: float, scale: float, phase: int) -> None:
         groups = [
@@ -250,10 +267,10 @@ class TrafficControlApp:
                 self.map_canvas.create_oval(px - 6, y - 6, px + 6, y + 6, fill=color, outline="#111827", width=1)
                 self.map_canvas.create_text(px, y + 15 * scale, text=move, fill="#f8fafc", font=("Segoe UI", 8, "bold"))
 
-    def _draw_accident(self, accident: dict, cx: float, cy: float, scale: float) -> None:
-        x = cx + (float(accident["x"]) - 250.0) * scale
-        y = cy - (float(accident["y"]) - 250.0) * scale
-        size = 13 * scale
+    def _draw_accident(self, accident: dict, cx: float, cy: float, scale_m: float, scale: float) -> None:
+        x = cx + float(accident["x"]) * scale_m
+        y = cy - float(accident["y"]) * scale_m
+        size = 2.5 * scale_m
         self.map_canvas.create_polygon(
             x,
             y - size,
@@ -267,20 +284,38 @@ class TrafficControlApp:
         )
         self.map_canvas.create_text(x, y + size * 0.35, text="!", fill="#111827", font=("Segoe UI", 10, "bold"))
 
-    def _draw_vehicle(self, vehicle: dict, cx: float, cy: float, scale: float) -> None:
-        x = cx + (float(vehicle["x"]) - 250.0) * scale
-        y = cy - (float(vehicle["y"]) - 250.0) * scale
-        length = 18 * scale
-        width = 10 * scale
+    def _draw_vehicle(self, vehicle: dict, cx: float, cy: float, scale_m: float, scale: float) -> None:
+        import math
+        x = cx + float(vehicle["x"]) * scale_m
+        y = cy - float(vehicle["y"]) * scale_m
+        length_m = 6.5 if vehicle["type"] == "ambulance" else 5.0
+        width_m = 2.0
+        
         fill = {"car": "#38bdf8", "ambulance": "#f8fafc", "violator": "#ef4444"}.get(vehicle["type"], "#a78bfa")
         outline = "#f59e0b" if vehicle.get("accident") else "#dc2626" if vehicle["type"] == "ambulance" else "#111827"
-        self.map_canvas.create_rectangle(x - width / 2, y - length / 2, x + width / 2, y + length / 2, fill=fill, outline=outline, width=2)
+        
+        rad = math.radians(vehicle["angle"])
+        sin_a = math.sin(rad)
+        cos_a = math.cos(rad)
+        hl = (length_m * scale_m) / 2
+        hw = (width_m * scale_m) / 2
+        
+        pts = [
+            (x - hw * cos_a + hl * sin_a, y - hw * sin_a - hl * cos_a),
+            (x + hw * cos_a + hl * sin_a, y + hw * sin_a - hl * cos_a),
+            (x + hw * cos_a - hl * sin_a, y + hw * sin_a + hl * cos_a),
+            (x - hw * cos_a - hl * sin_a, y - hw * sin_a + hl * cos_a),
+        ]
+        
+        self.map_canvas.create_polygon(*[c for p in pts for c in p], fill=fill, outline=outline, width=2)
+        
         if vehicle["type"] == "ambulance":
-            self.map_canvas.create_line(x - width / 3, y, x + width / 3, y, fill="#dc2626", width=2)
-            self.map_canvas.create_line(x, y - width / 3, x, y + width / 3, fill="#dc2626", width=2)
-        self._draw_vehicle_intent(vehicle, x, y, scale)
+            self.map_canvas.create_line(x - hw/1.5, y, x + hw/1.5, y, fill="#dc2626", width=2)
+            self.map_canvas.create_line(x, y - hw/1.5, x, y + hw/1.5, fill="#dc2626", width=2)
+            
+        self._draw_vehicle_intent(vehicle, x, y, scale_m, scale)
 
-    def _draw_vehicle_intent(self, vehicle: dict, x: float, y: float, scale: float) -> None:
+    def _draw_vehicle_intent(self, vehicle: dict, x: float, y: float, scale_m: float, scale: float) -> None:
         directions = {
             "J2N": (0, -1),
             "J2S": (0, 1),
@@ -288,8 +323,8 @@ class TrafficControlApp:
             "J2W": (-1, 0),
         }
         dx, dy = directions.get(vehicle.get("target", ""), (0, -1))
-        start = 10 * scale
-        end = 28 * scale
+        start = 2.5 * scale_m
+        end = 6.0 * scale_m
         x1 = x + dx * start
         y1 = y + dy * start
         x2 = x + dx * end

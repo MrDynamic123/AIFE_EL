@@ -167,6 +167,8 @@ def ensure_sumo_assets(base_dir: Path = SUMO_DIR) -> Path:
             str(connection_file),
             "--tllogic-files",
             str(tl_file),
+            "--offset.disable-normalization",
+            "true",
             "--output-file",
             str(net_file),
         ],
@@ -240,9 +242,11 @@ class SumoEnvironment(gym.Env):
         self.emergency_ids: set[str] = set()
         self.force_priority = True
         self.background_traffic = False
+        self.last_waiting_time = 0.0
+        self.cleared_emergencies = 0
 
-        # 8 queues + phase + 8 occupancies + 8 speeds + emergency + blocked
-        self.observation_space = spaces.Box(low=0.0, high=1.0, shape=(27,), dtype=np.float32)
+        # 8 queues + phase + time_since_switch + 8 occupancies + 8 speeds + emergency + blocked
+        self.observation_space = spaces.Box(low=0.0, high=1.0, shape=(28,), dtype=np.float32)
         self.action_space = spaces.Discrete(len(self.green_phases))
 
     def reset(self, *, seed: int | None = None, options: dict | None = None):
@@ -260,6 +264,8 @@ class SumoEnvironment(gym.Env):
         self.emergency_ids.clear()
         self.force_priority = True
         self.background_traffic = False
+        self.last_waiting_time = 0.0
+        self.cleared_emergencies = 0
         traci.trafficlight.setProgram(SPEC.junction_id, "rl")
         traci.trafficlight.setPhase(SPEC.junction_id, self.current_green)
         return self._get_obs(), {}
@@ -269,10 +275,14 @@ class SumoEnvironment(gym.Env):
             action = self._priority_action_for_emergency()
         self._apply_action(int(action))
         self._spawn_background_traffic()
-        self._enforce_red_lights()
         self._enforce_accident_blocks()
         traci.simulationStep()
         self.step_count += 1
+        
+        active_vehicles = set(traci.vehicle.getIDList())
+        self.cleared_emergencies = len(self.emergency_ids - active_vehicles)
+        self.emergency_ids.intersection_update(active_vehicles)
+        
         self._clear_expired_accidents()
         self._issue_red_light_fines()
         obs = self._get_obs()
@@ -298,7 +308,14 @@ class SumoEnvironment(gym.Env):
         veh_id = f"{prefix}_{self.vehicle_counter}"
         self.vehicle_counter += 1
         veh_type = "ambulance" if ambulance else "violator" if violator else "car"
-        traci.vehicle.add(veh_id, route_id, typeID=veh_type, departLane=depart_lane, departSpeed="max")
+        traci.vehicle.add(
+            veh_id, 
+            route_id, 
+            typeID=veh_type, 
+            departLane=depart_lane, 
+            departSpeed="max",
+            departPos="185"
+        )
         traci.vehicle.setMaxSpeed(veh_id, 8.0 if ambulance else 7.0 if violator else 6.0)
         if ambulance:
             self.emergency_ids.add(veh_id)
@@ -323,10 +340,10 @@ class SumoEnvironment(gym.Env):
         pos = min(max(lane_len - 18.0, 5.0), lane_len - 2.0)
         road_id = traci.vehicle.getRoadID(veh_id)
         lane_index = traci.vehicle.getLaneIndex(veh_id)
-        traci.vehicle.setStop(veh_id, road_id, pos=pos, laneIndex=lane_index, duration=24)
+        traci.vehicle.setStop(veh_id, road_id, pos=pos, laneIndex=lane_index, duration=48)
         traci.vehicle.setColor(veh_id, (255, 185, 28, 255))
         self.blocked_lanes.add(lane_id)
-        x, y = self._accident_marker_position(lane_id)
+        x, y = traci.vehicle.getPosition(veh_id)
         self.accidents[veh_id] = {
             "id": veh_id,
             "lane": lane_id,
@@ -378,27 +395,9 @@ class SumoEnvironment(gym.Env):
         self.last_switch_step = self.step_count
 
     def _spawn_background_traffic(self) -> None:
-        if self.background_traffic and self.rng.random() < 0.025:
+        if self.background_traffic and self.rng.random() < 0.1:
             self.spawn_car()
 
-    def _enforce_red_lights(self) -> None:
-        for veh_id in traci.vehicle.getIDList():
-            if veh_id in self.accidents:
-                continue
-            edge = traci.vehicle.getRoadID(veh_id)
-            if edge not in SPEC.inbound_edges or self._edge_has_green(edge):
-                continue
-            lane_id = traci.vehicle.getLaneID(veh_id)
-            lane_len = traci.lane.getLength(lane_id)
-            stop_pos = max(lane_len - 14.0, 1.0)
-            if traci.vehicle.getLanePosition(veh_id) < stop_pos:
-                traci.vehicle.setStop(
-                    veh_id,
-                    edge,
-                    pos=stop_pos,
-                    laneIndex=traci.vehicle.getLaneIndex(veh_id),
-                    duration=1,
-                )
 
     def _enforce_accident_blocks(self) -> None:
         for accident in self.accidents.values():
@@ -440,14 +439,18 @@ class SumoEnvironment(gym.Env):
     def _get_obs(self) -> np.ndarray:
         queues = [min(traci.lane.getLastStepHaltingNumber(lane) / 20.0, 1.0) for lane in SPEC.inbound_lanes]
         phase = [self.current_green / 3.0]
+        time_since_switch = [min((self.step_count - self.last_switch_step) / 100.0, 1.0)]
         occupancies = [min(traci.lane.getLastStepOccupancy(lane) / 100.0, 1.0) for lane in SPEC.inbound_lanes]
         speeds = [min(traci.lane.getLastStepMeanSpeed(lane) / 20.0, 1.0) for lane in SPEC.inbound_lanes]
         flags = [float(bool(self.emergency_ids & set(traci.vehicle.getIDList()))), float(bool(self.blocked_lanes))]
-        return np.array(queues + phase + occupancies + speeds + flags, dtype=np.float32)
+        return np.array(queues + phase + time_since_switch + occupancies + speeds + flags, dtype=np.float32)
 
     def _reward(self) -> float:
         vehicle_ids = traci.vehicle.getIDList()
         waiting = sum(traci.vehicle.getWaitingTime(v) for v in vehicle_ids)
+        waiting_diff = waiting - self.last_waiting_time
+        self.last_waiting_time = waiting
+        
         ambulance_waiting = sum(traci.vehicle.getWaitingTime(v) for v in vehicle_ids if v in self.emergency_ids)
         queues = sum(traci.lane.getLastStepHaltingNumber(lane) for lane in SPEC.inbound_lanes)
         pressure = abs(
@@ -455,14 +458,9 @@ class SumoEnvironment(gym.Env):
             - sum(traci.edge.getLastStepVehicleNumber(edge) for edge in SPEC.outbound_edges)
         )
         collisions = traci.simulation.getCollidingVehiclesNumber()
-        cleared = self._cleared_emergency_count(vehicle_ids)
-        return -waiting - queues - pressure - (50.0 * ambulance_waiting) - (1000.0 * collisions) + (500.0 * cleared)
+        cleared = self.cleared_emergencies
+        return -waiting_diff - queues - pressure - (50.0 * ambulance_waiting) - (1000.0 * collisions) + (500.0 * cleared)
 
-    def _cleared_emergency_count(self, active_vehicle_ids: Iterable[str]) -> int:
-        active = set(active_vehicle_ids)
-        before = len(self.emergency_ids)
-        self.emergency_ids.intersection_update(active)
-        return before - len(self.emergency_ids)
 
     def _info(self, reward: float) -> dict:
         vehicle_ids = traci.vehicle.getIDList()
@@ -500,19 +498,8 @@ class SumoEnvironment(gym.Env):
 
     def _distance_to_junction(self, veh_id: str) -> float:
         x, y = traci.vehicle.getPosition(veh_id)
-        return abs(x - 250.0) + abs(y - 250.0)
+        return abs(x) + abs(y)
 
-    @staticmethod
-    def _accident_marker_position(lane_id: str) -> tuple[float, float]:
-        if lane_id.startswith("N2J"):
-            return 245.0 if lane_id.endswith("_0") else 255.0, 282.0
-        if lane_id.startswith("S2J"):
-            return 255.0 if lane_id.endswith("_0") else 245.0, 218.0
-        if lane_id.startswith("E2J"):
-            return 282.0, 255.0 if lane_id.endswith("_0") else 245.0
-        if lane_id.startswith("W2J"):
-            return 218.0, 245.0 if lane_id.endswith("_0") else 255.0
-        return 250.0, 250.0
 
     @staticmethod
     def _target_for_route(route_id: str) -> str:
@@ -569,7 +556,7 @@ class SumoEnvironment(gym.Env):
     def _set_turn_signal(veh_id: str, route_id: str) -> None:
         if route_id in {"N_E", "S_W", "E_S", "W_N"}:
             traci.vehicle.setSignals(veh_id, 0x02)
-        elif route_id in set():
+        elif route_id in {"N_W", "S_E", "E_N", "W_S"}:
             traci.vehicle.setSignals(veh_id, 0x01)
 
 

@@ -12,3 +12,7 @@ env/
 
 .DS_Store
 Thumbs.db
+
+test_pos.py
+test_spawn.py
+
