@@ -387,6 +387,28 @@ class SumoEnvironment(gym.Env):
         can_switch = self.step_count - self.last_switch_step >= min_green_steps
         if target_green == self.current_green or not can_switch:
             return
+
+        # Guard: don't switch while a vehicle is still near the stop line on the current green
+        # edges — prevents peer cars (e.g. W2J after E2J) being stranded on red mid-phase.
+        # Cap the extension to max_guard_steps so a long draining queue doesn't block the
+        # other direction indefinitely.
+        max_guard_steps = max(1, int(15.0 / self.step_length))  # hold at most 15 s extra
+        steps_since_min = self.step_count - self.last_switch_step - min_green_steps
+        if steps_since_min < max_guard_steps:
+            current_edges = ("N2J", "S2J") if self.current_green == 0 else ("E2J", "W2J")
+            for veh_id in traci.vehicle.getIDList():
+                edge = traci.vehicle.getRoadID(veh_id)
+                if edge not in current_edges:
+                    continue
+                lane_id = traci.vehicle.getLaneID(veh_id)
+                if not lane_id:
+                    continue
+                lane_len = traci.lane.getLength(lane_id)
+                pos = traci.vehicle.getLanePosition(veh_id)
+                # Vehicle is within 30 m of the stop line — hold green.
+                if pos > lane_len - 30.0:
+                    return
+
         traci.trafficlight.setPhase(SPEC.junction_id, self.yellow_after_green[self.current_green])
         traci.simulationStep()
         self.step_count += 1
